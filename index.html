@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>chromakey &rarr; gif</title>
-<meta name="description" content="Turn a green-screen video into a transparent animated GIF. Runs entirely in your browser — nothing is uploaded.">
+<title>gif converter</title>
+<meta name="description" content="Convert a video to an animated GIF in your browser — trim, crop, flip, mirror, reverse, and optional green-screen removal. Nothing is uploaded.">
 <style>
   :root{
     --bg:#15171b; --panel:#1c2026; --panel-2:#232830; --line:#2e343e;
@@ -55,6 +55,7 @@
   #preview{display:none;max-width:100%;height:auto;image-rendering:auto}
   #preview.live{display:block}
   #preview.pick{cursor:crosshair}
+  .cropov{position:absolute;border:1.5px solid var(--accent);background:rgba(33,214,166,.12);box-shadow:0 0 0 9999px rgba(10,12,15,.45);pointer-events:none;z-index:5}
 
   .drop{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;padding:28px;cursor:pointer;transition:background .12s}
   .drop:hover,.drop.over{background:rgba(33,214,166,.06)}
@@ -155,7 +156,7 @@
 <body>
 <div class="wrap">
   <header class="top">
-    <div class="word"><span class="g">chroma</span>key<span class="ar">&rarr;</span>gif</div>
+    <div class="word"><span class="g">gif</span><span class="ar">&middot;</span>converter</div>
     <div class="tagline"><b>100% in your browser</b> · nothing is uploaded</div>
   </header>
 
@@ -165,11 +166,12 @@
       <div class="bd">
         <div id="stage" class="chk">
           <canvas id="preview"></canvas>
+          <div id="cropOv" class="cropov" style="display:none"></div>
           <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a video file">
             <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M5 20h14"/></svg>
-            <h2>Drop a green-screen video</h2>
+            <h2>Drop a video or GIF</h2>
             <p>Or click to choose a file. It is processed on your device — frames never leave the browser.</p>
-            <span class="hint">mp4 · webm · mov</span>
+            <span class="hint">mp4 · webm · mov · gif</span>
           </div>
         </div>
         <div class="scrub" id="scrub" style="display:none">
@@ -256,6 +258,23 @@
             <label class="tog"><input type="checkbox" id="tClean" checked><span>Clean strays<small>drop specks</small></span></label>
             <label class="tog"><input type="checkbox" id="tCrop" checked><span>Auto-crop<small>trim empties</small></span></label>
             <label class="tog"><input type="checkbox" id="tLoop" checked><span>Loop<small>repeat forever</small></span></label>
+          </div>
+        </div>
+
+        <div class="row">
+          <label class="lab">Transform</label>
+          <div class="toggles">
+            <label class="tog"><input type="checkbox" id="tMirror"><span>Mirror<small>flip left ↔ right</small></span></label>
+            <label class="tog"><input type="checkbox" id="tFlip"><span>Flip<small>flip top ↕ bottom</small></span></label>
+            <label class="tog"><input type="checkbox" id="tReverse"><span>Reverse<small>play backward</small></span></label>
+          </div>
+        </div>
+
+        <div class="row">
+          <label class="lab">Crop <span class="val" id="cropLbl">none</span></label>
+          <div class="seg">
+            <button id="cropBtn" type="button">Draw crop</button>
+            <button id="cropClear" type="button">Clear</button>
           </div>
         </div>
 
@@ -494,6 +513,30 @@ function cropFrame(d,w,box){
   for(let y=0;y<box.h;y++){const s=((box.y+y)*w+box.x)*4;out.set(d.subarray(s,s+box.w*4),y*box.w*4);}
   return out;
 }
+function mirrorFrame(d,w,h){ // flip horizontally (left/right)
+  const out=new Uint8Array(d.length);
+  for(let y=0;y<h;y++){const row=y*w*4;for(let x=0;x<w;x++){const s=row+x*4,t=row+(w-1-x)*4;out[t]=d[s];out[t+1]=d[s+1];out[t+2]=d[s+2];out[t+3]=d[s+3];}}
+  return out;
+}
+function flipFrame(d,w,h){ // flip vertically (top/bottom)
+  const out=new Uint8Array(d.length);
+  for(let y=0;y<h;y++){const s=y*w*4;out.set(d.subarray(s,s+w*4),(h-1-y)*w*4);}
+  return out;
+}
+function rectToBox(rect,w,h){ // normalised {x,y,w,h} (0..1) -> integer pixel box, clamped
+  let x=Math.round(rect.x*w),y=Math.round(rect.y*h);
+  let bw=Math.round(rect.w*w),bh=Math.round(rect.h*h);
+  x=Math.max(0,Math.min(w-1,x)); y=Math.max(0,Math.min(h-1,y));
+  bw=Math.max(1,Math.min(w-x,bw)); bh=Math.max(1,Math.min(h-y,bh));
+  return {x,y,w:bw,h:bh};
+}
+function applyGeom(d,w,h,opts){ // crop -> mirror -> flip; returns {data,w,h}
+  let cw=w,ch=h,cd=d;
+  if(opts.cropRect){const box=rectToBox(opts.cropRect,w,h);cd=cropFrame(cd,cw,box);cw=box.w;ch=box.h;}
+  if(opts.mirror){cd=mirrorFrame(cd,cw,ch);}
+  if(opts.flip){cd=flipFrame(cd,cw,ch);}
+  return {data:cd,w:cw,h:ch};
+}
 function flattenFrame(d,w,h,bg,at){
   at=at==null?128:at; const br=bg[0],bgG=bg[1],bb=bg[2];
   for(let i=0,p=0;i<w*h;i++,p+=4){
@@ -518,7 +561,7 @@ function autoKey(d,w,h){
 /* ===== ENGINE END ===== */
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { medianCut, buildGlobalPalette, makeNearest, lzwEncode, ByteBuffer, encodeGIF, chromaKey, cleanupAlpha, contentBBox, cropFrame, flattenFrame, autoKey };
+  module.exports = { medianCut, buildGlobalPalette, makeNearest, lzwEncode, ByteBuffer, encodeGIF, chromaKey, cleanupAlpha, contentBBox, cropFrame, mirrorFrame, flipFrame, rectToBox, applyGeom, flattenFrame, autoKey };
 }
 
 /* ============================================================
@@ -528,9 +571,11 @@ if (typeof document !== 'undefined') {
 (function(){
 const $=id=>document.getElementById(id);
 const vid=$('vid');
-let loaded=false, procW=480, procH=270, srcData=null, rafPending=false, busy=false, cancelReq=false;
-const DEFAULTS={keyOn:true,sim:45,feather:18,width:480,fps:15,colors:128,spill:true,clean:true,crop:true,loop:true,bg:false,bgColor:'#ffffff'};
-const params={key:[30,200,50],trimA:0,trimB:0,...DEFAULTS};
+let loaded=false, procW=480, procH=270, srcData=null, rafPending=false, busy=false, cancelReq=false, cropMode=false;
+// frame source: either a <video> or a decoded animated GIF
+let srcKind='video', gifFrames=null, natW=0, natH=0, natDur=0, curT=0;
+const DEFAULTS={keyOn:true,sim:45,feather:18,width:480,fps:15,colors:128,spill:true,clean:true,crop:true,loop:true,bg:false,bgColor:'#ffffff',mirror:false,flip:false,reverse:false};
+const params={key:[30,200,50],trimA:0,trimB:0,cropRect:null,...DEFAULTS};
 
 const PKEY='chromakey-gif-prefs';
 function savePrefs(){try{const o={};for(const k in DEFAULTS)o[k]=params[k];localStorage.setItem(PKEY,JSON.stringify(o));}catch(e){}}
@@ -566,46 +611,101 @@ function applyPrefsToUI(){
   $('tCrop').checked=params.crop; $('tLoop').checked=params.loop;
   $('tBg').checked=params.bg; $('bgColor').value=params.bgColor; $('bgHex').value=params.bgColor;
   $('bgSwatch').style.background=params.bgColor; $('bgLbl').textContent=params.bg?params.bgColor:'transparent';
+  $('tMirror').checked=params.mirror; $('tFlip').checked=params.flip; $('tReverse').checked=params.reverse;
+  updateCropLbl();
   updateEstimate();
 }
 function updateEstimate(){
-  if(!loaded){$('goNote').textContent='Load a video to begin.';return;}
+  if(!loaded){$('goNote').textContent='Load a video or GIF to begin.';return;}
   const span=Math.max(0,params.trimB-params.trimA);
   let n=Math.floor(span*params.fps)||1; const MAXF=450; const capped=n>MAXF; if(capped)n=MAXF;
   $('goNote').textContent='≈ '+n+' frames · '+span.toFixed(1)+'s @ '+params.fps+' fps'+(capped?' (capped at '+MAXF+')':'')+(params.crop?' · auto-cropped':'');
 }
 
 const drop=$('drop');
-function openPicker(){const inp=document.createElement('input');inp.type='file';inp.accept='video/*';inp.onchange=()=>{if(inp.files[0])loadVideo(inp.files[0]);};inp.click();}
+function openPicker(){const inp=document.createElement('input');inp.type='file';inp.accept='video/*,image/gif';inp.onchange=()=>{if(inp.files[0])loadFile(inp.files[0]);};inp.click();}
 drop.addEventListener('click',openPicker);
 drop.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openPicker();}});
 ['dragenter','dragover'].forEach(ev=>document.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over');}));
-['dragleave','drop'].forEach(ev=>document.addEventListener(ev,e=>{e.preventDefault();if(ev==='drop'){const f=e.dataTransfer&&e.dataTransfer.files[0];if(f)loadVideo(f);}drop.classList.remove('over');}));
+['dragleave','drop'].forEach(ev=>document.addEventListener(ev,e=>{e.preventDefault();if(ev==='drop'){const f=e.dataTransfer&&e.dataTransfer.files[0];if(f)loadFile(f);}drop.classList.remove('over');}));
+
+function loadFile(file){
+  if(typeof stopPlay==='function')stopPlay();
+  const isGif=file.type==='image/gif'||/\.gif$/i.test(file.name);
+  if(isGif)loadGif(file); else loadVideo(file);
+}
+
+// Shared once a source's natural width/height/duration are known.
+function onSourceReady(){
+  const isGif=srcKind==='gif';
+  // GIFs usually already have their background handled — default to NO re-keying so
+  // we just edit (trim/crop/flip/resize) and preserve the existing transparency.
+  // Videos restore the user's saved key preference (default on).
+  if(isGif){params.keyOn=false;}
+  else{try{const s=JSON.parse(localStorage.getItem(PKEY)||'{}');params.keyOn=s.keyOn!==false;}catch(e){params.keyOn=true;}}
+  $('tKey').checked=params.keyOn; setKeyEnabled();
+  loaded=true; computeDims();
+  $('controls').classList.remove('disabled-area');
+  $('scrub').style.display='flex'; $('trim').style.display='flex';
+  params.trimA=0; params.trimB=natDur;
+  params.cropRect=null; cropMode=false; $('cropBtn').classList.remove('on'); $('cropOv').style.display='none'; updateCropLbl();
+  $('trimA').value=0; $('trimB').value=1000; drawTrim();
+  $('goBtn').disabled=false; updateEstimate();
+  seekPreview(Math.min(natDur*0.15, Math.max(0,natDur-0.01))).then(()=>{
+    if(params.keyOn)setKey(autoKey(srcData.data,procW,procH));
+  });
+}
 
 function loadVideo(file){
-  if(typeof stopPlay==='function')stopPlay();
-  if(!file.type.startsWith('video/')&&!/\.(mp4|webm|mov|m4v|ogg)$/i.test(file.name)){showMsg('That does not look like a video file.','bad');return;}
   clearMsg();
-  const url=URL.createObjectURL(file);
-  vid.src=url;
+  if(!file.type.startsWith('video/')&&!/\.(mp4|webm|mov|m4v|ogg)$/i.test(file.name)){showMsg('That does not look like a video or GIF file.','bad');return;}
+  vid.src=URL.createObjectURL(file);
   vid.onloadedmetadata=()=>{
     if(!vid.videoWidth){showMsg('Could not read this video. Try an MP4 (H.264) or WebM.','bad');return;}
-    loaded=true; computeDims();
-    $('controls').classList.remove('disabled-area');
-    $('scrub').style.display='flex'; $('trim').style.display='flex';
-    params.trimA=0; params.trimB=vid.duration;
-    $('trimA').value=0; $('trimB').value=1000; drawTrim();
-    $('goBtn').disabled=false; updateEstimate();
-    seekPreview(Math.min(vid.duration*0.15, Math.max(0,vid.duration-0.01))).then(()=>{
-      setKey(autoKey(srcData.data,procW,procH));
-    });
+    srcKind='video'; gifFrames=null; natW=vid.videoWidth; natH=vid.videoHeight; natDur=vid.duration||0;
+    onSourceReady();
   };
   vid.onerror=()=>showMsg('This video format cannot be decoded in the browser. Try MP4 (H.264) or WebM.','bad');
 }
 
+async function loadGif(file){
+  clearMsg();
+  if(typeof window.ImageDecoder!=='function'){showMsg('This browser can’t decode GIFs here — try Chrome or Edge, or convert the GIF to MP4/WebM first.','bad');return;}
+  try{
+    const buf=await file.arrayBuffer();
+    const dec=new ImageDecoder({data:buf,type:'image/gif'});
+    await dec.tracks.ready; try{await dec.completed;}catch(e){}
+    const frames=[]; let total=0, i=0;
+    while(i<5000){
+      let res; try{res=await dec.decode({frameIndex:i});}catch(e){break;}
+      const img=res.image, iw=img.displayWidth||img.codedWidth, ih=img.displayHeight||img.codedHeight;
+      const c=document.createElement('canvas'); c.width=iw; c.height=ih;
+      c.getContext('2d').drawImage(img,0,0);
+      const durMs=img.duration?img.duration/1000:100; // VideoFrame.duration is microseconds
+      frames.push({canvas:c,durMs}); total+=durMs; img.close(); i++;
+      if(res.complete===false&&i>= (dec.tracks.selectedTrack&&dec.tracks.selectedTrack.frameCount||1e9))break;
+    }
+    if(!frames.length){showMsg('Could not read any frames from this GIF.','bad');return;}
+    srcKind='gif'; gifFrames=frames; natW=frames[0].canvas.width; natH=frames[0].canvas.height; natDur=Math.max(0.05,total/1000);
+    onSourceReady();
+  }catch(err){showMsg('Could not decode this GIF: '+((err&&err.message)||err),'bad');}
+}
+
+function frameIndexAt(t){ // seconds -> gif frame index
+  if(!gifFrames)return 0; const ms=t*1000; let acc=0;
+  for(let i=0;i<gifFrames.length;i++){acc+=gifFrames[i].durMs;if(ms<acc)return i;}
+  return gifFrames.length-1;
+}
+// Draw the source frame at time t into srcCanvas at procW×procH (async for video seeks).
+async function grabTo(t){
+  curT=t;
+  if(srcKind==='gif'){srcCtx.drawImage(gifFrames[frameIndexAt(t)].canvas,0,0,procW,procH);return;}
+  await seek(t); srcCtx.drawImage(vid,0,0,procW,procH);
+}
+
 function computeDims(){
-  let w=params.width||vid.videoWidth; w=Math.min(w,vid.videoWidth)||480;
-  const h=Math.max(1,Math.round(w*vid.videoHeight/vid.videoWidth));
+  let w=params.width||natW; w=Math.min(w,natW)||480;
+  const h=Math.max(1,Math.round(w*natH/natW));
   procW=w; procH=h;
   srcCanvas.width=w; srcCanvas.height=h; preview.width=w; preview.height=h;
   $('dimsTag').textContent=w+' × '+h;
@@ -621,8 +721,7 @@ function seek(t){
   });
 }
 async function seekPreview(t){
-  await seek(t);
-  srcCtx.drawImage(vid,0,0,procW,procH);
+  await grabTo(t);
   srcData=srcCtx.getImageData(0,0,procW,procH);
   preview.classList.add('live'); drop.style.display='none';
   renderPreview();
@@ -636,7 +735,13 @@ function renderPreview(){
     chromaKey(work,procW,procH,params.key,params.sim,params.feather,params.spill?0.55:0);
     if(params.clean)cleanupAlpha(work,procW,procH,{key:params.key,sim:params.sim});
   }
-  pctx.putImageData(new ImageData(work,procW,procH),0,0);
+  // While drawing a crop, show the full uncropped frame so the user can frame it.
+  const cropRect=cropMode?null:params.cropRect;
+  const g=applyGeom(work,procW,procH,{cropRect,mirror:params.mirror,flip:params.flip});
+  if(preview.width!==g.w||preview.height!==g.h){preview.width=g.w;preview.height=g.h;}
+  pctx.putImageData(new ImageData(new Uint8ClampedArray(g.data),g.w,g.h),0,0);
+  $('dimsTag').textContent=g.w+' × '+g.h;
+  if(cropMode)positionCropOv();
 }
 
 let picking=false;
@@ -660,7 +765,7 @@ $('tSpill').addEventListener('change',e=>{params.spill=e.target.checked;savePref
 $('tClean').addEventListener('change',e=>{params.clean=e.target.checked;savePrefs();scheduledPreview();});
 $('tCrop').addEventListener('change',e=>{params.crop=e.target.checked;savePrefs();updateEstimate();});
 $('tLoop').addEventListener('change',e=>{params.loop=e.target.checked;savePrefs();});
-$('wSeg').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;Array.prototype.forEach.call($('wSeg').children,c=>c.classList.remove('on'));b.classList.add('on');params.width=+b.dataset.w;$('wTag').textContent=params.width+' px';savePrefs();if(loaded){const t=vid.currentTime;computeDims();seekPreview(t);}});
+$('wSeg').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;Array.prototype.forEach.call($('wSeg').children,c=>c.classList.remove('on'));b.classList.add('on');params.width=+b.dataset.w;$('wTag').textContent=params.width+' px';savePrefs();if(loaded){const t=curT;computeDims();seekPreview(t);}});
 $('colSeg').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;Array.prototype.forEach.call($('colSeg').children,c=>c.classList.remove('on'));b.classList.add('on');params.colors=+b.dataset.c;$('colTag').textContent=b.dataset.c;savePrefs();});
 
 /* background flatten */
@@ -673,7 +778,7 @@ $('bgHex').addEventListener('change',e=>setBgColor(e.target.value.trim()));
 function drawTrim(){
   const a=Math.min(+$('trimA').value,+$('trimB').value), b=Math.max(+$('trimA').value,+$('trimB').value);
   $('trimSel').style.left=(a/10)+'%'; $('trimSel').style.width=((b-a)/10)+'%';
-  if(loaded){params.trimA=a/1000*vid.duration; params.trimB=b/1000*vid.duration;
+  if(loaded){params.trimA=a/1000*natDur; params.trimB=b/1000*natDur;
     $('trimT').textContent=params.trimA.toFixed(2)+'–'+params.trimB.toFixed(2)+'s'; updateEstimate();}
 }
 ['trimA','trimB'].forEach(id=>$(id).addEventListener('input',drawTrim));
@@ -682,41 +787,92 @@ function drawTrim(){
 $('fnameIn').addEventListener('input',()=>{const n=($('fnameIn').value.trim()||'transparent').replace(/\.gif$/i,'');$('dlLink').download=n+'.gif';});
 
 /* reset */
-$('resetBtn').addEventListener('click',()=>{Object.assign(params,DEFAULTS);savePrefs();applyPrefsToUI();if(loaded)scheduledPreview();});
+$('resetBtn').addEventListener('click',()=>{Object.assign(params,DEFAULTS);params.cropRect=null;cropMode=false;$('cropBtn').classList.remove('on');$('cropOv').style.display='none';savePrefs();applyPrefsToUI();if(loaded)scheduledPreview();});
 
 /* cancel */
 $('cancelBtn').addEventListener('click',()=>{cancelReq=true;});
 
 /* master key on/off */
-$('tKey').addEventListener('change',e=>{params.keyOn=e.target.checked;setKeyEnabled();savePrefs();scheduledPreview();});
+$('tKey').addEventListener('change',e=>{params.keyOn=e.target.checked;setKeyEnabled();savePrefs();if(e.target.checked&&srcData){setKey(autoKey(srcData.data,procW,procH));}else scheduledPreview();});
 
 /* play / pause preview */
-let playing=false, playRAF=0;
+let playing=false, playRAF=0, gifClock=0, gifLast=0;
 function setPlayIcon(){$('playBtn').querySelector('.ic-play').style.display=playing?'none':'';$('playBtn').querySelector('.ic-pause').style.display=playing?'':'none';}
 function stopPlay(){playing=false;cancelAnimationFrame(playRAF);try{vid.pause();}catch(e){}setPlayIcon();}
-function playLoop(){
+function showPlayFrame(t){srcData=srcCtx.getImageData(0,0,procW,procH);renderPreview();curT=t;$('scrubT').textContent=t.toFixed(2)+'s';if(natDur)$('scrubR').value=Math.round(t/natDur*1000);}
+function playLoop(){ // video
   if(!playing)return;
-  const end=Math.min(vid.duration||0,params.trimB||vid.duration);
+  const end=Math.min(natDur||0,params.trimB||natDur);
   if(vid.currentTime>=end-1e-3){ if(params.loop){try{vid.currentTime=Math.max(0,params.trimA);}catch(e){} } else { stopPlay(); return; } }
-  srcCtx.drawImage(vid,0,0,procW,procH);
-  srcData=srcCtx.getImageData(0,0,procW,procH);
-  renderPreview();
-  const t=vid.currentTime; $('scrubT').textContent=t.toFixed(2)+'s';
-  if(vid.duration)$('scrubR').value=Math.round(t/vid.duration*1000);
+  srcCtx.drawImage(vid,0,0,procW,procH); showPlayFrame(vid.currentTime);
   playRAF=requestAnimationFrame(playLoop);
+}
+function playLoopGif(ts){
+  if(!playing)return;
+  if(!gifLast)gifLast=ts; const d=(ts-gifLast)/1000; gifLast=ts;
+  const end=Math.min(natDur,params.trimB||natDur);
+  gifClock+=d;
+  if(gifClock>=end-1e-3){ if(params.loop)gifClock=Math.max(0,params.trimA); else {stopPlay();return;} }
+  srcCtx.drawImage(gifFrames[frameIndexAt(gifClock)].canvas,0,0,procW,procH); showPlayFrame(gifClock);
+  playRAF=requestAnimationFrame(playLoopGif);
 }
 $('playBtn').addEventListener('click',()=>{
   if(!loaded)return;
   if(playing){stopPlay();return;}
-  playing=true; setPlayIcon();
-  if(vid.currentTime>=Math.min(vid.duration||0,params.trimB||vid.duration)-1e-3)try{vid.currentTime=Math.max(0,params.trimA);}catch(e){}
-  preview.classList.add('live'); drop.style.display='none';
-  vid.play().then(playLoop).catch(()=>{stopPlay();});
+  playing=true; setPlayIcon(); preview.classList.add('live'); drop.style.display='none';
+  const end=Math.min(natDur||0,params.trimB||natDur);
+  if(srcKind==='gif'){
+    gifLast=0; gifClock=(curT>=end-1e-3)?Math.max(0,params.trimA):curT;
+    playRAF=requestAnimationFrame(playLoopGif);
+  }else{
+    if(vid.currentTime>=end-1e-3)try{vid.currentTime=Math.max(0,params.trimA);}catch(e){}
+    vid.play().then(playLoop).catch(()=>{stopPlay();});
+  }
+});
+
+/* transforms: mirror / flip / reverse */
+$('tMirror').addEventListener('change',e=>{params.mirror=e.target.checked;savePrefs();scheduledPreview();});
+$('tFlip').addEventListener('change',e=>{params.flip=e.target.checked;savePrefs();scheduledPreview();});
+$('tReverse').addEventListener('change',e=>{params.reverse=e.target.checked;savePrefs();});
+
+/* manual crop */
+let cropStart=null, dragRect=null;
+function updateCropLbl(){
+  if(params.cropRect&&loaded){const b=rectToBox(params.cropRect,procW,procH);$('cropLbl').textContent=b.w+'×'+b.h+' px';}
+  else $('cropLbl').textContent='none';
+}
+function previewDispRect(){const sr=$('stage').getBoundingClientRect(),pr=preview.getBoundingClientRect();return {left:pr.left-sr.left,top:pr.top-sr.top,w:pr.width,h:pr.height};}
+function showCropOv(rect){const ov=$('cropOv');if(!rect){ov.style.display='none';return;}const d=previewDispRect();ov.style.display='block';ov.style.left=(d.left+rect.x*d.w)+'px';ov.style.top=(d.top+rect.y*d.h)+'px';ov.style.width=(rect.w*d.w)+'px';ov.style.height=(rect.h*d.h)+'px';}
+function positionCropOv(){if(cropMode)showCropOv(dragRect||params.cropRect);}
+function exitCropMode(){cropMode=false;$('cropBtn').classList.remove('on');preview.classList.remove('pick');updateCropLbl();renderPreview();$('cropOv').style.display='none';}
+$('cropBtn').addEventListener('click',()=>{
+  if(!loaded)return;
+  cropMode=!cropMode;$('cropBtn').classList.toggle('on',cropMode);preview.classList.toggle('pick',cropMode);
+  if(picking){picking=false;$('pickBtn').classList.remove('active');}
+  renderPreview();
+  if(cropMode)showCropOv(params.cropRect);else $('cropOv').style.display='none';
+});
+$('cropClear').addEventListener('click',()=>{params.cropRect=null;exitCropMode();});
+preview.addEventListener('mousedown',e=>{
+  if(!cropMode)return; e.preventDefault();
+  const pr=preview.getBoundingClientRect();
+  cropStart={px:pr.left,py:pr.top,pw:pr.width,ph:pr.height,x:e.clientX,y:e.clientY};dragRect=null;
+});
+window.addEventListener('mousemove',e=>{
+  if(!cropStart)return; const s=cropStart;
+  const cl=(v,a,b)=>Math.max(0,Math.min(1,v));
+  let x0=cl((Math.min(s.x,e.clientX)-s.px)/s.pw),y0=cl((Math.min(s.y,e.clientY)-s.py)/s.ph);
+  let x1=cl((Math.max(s.x,e.clientX)-s.px)/s.pw),y1=cl((Math.max(s.y,e.clientY)-s.py)/s.ph);
+  dragRect={x:x0,y:y0,w:x1-x0,h:y1-y0}; showCropOv(dragRect);
+});
+window.addEventListener('mouseup',()=>{
+  if(!cropStart)return; const dr=dragRect; cropStart=null;
+  if(dr&&dr.w>0.02&&dr.h>0.02)params.cropRect=dr; dragRect=null; exitCropMode();
 });
 
 const scrubR=$('scrubR');
 scrubR.addEventListener('input',e=>{
-  if(!loaded)return; if(playing)stopPlay(); const t=(+e.target.value/1000)*vid.duration; $('scrubT').textContent=t.toFixed(2)+'s';
+  if(!loaded)return; if(playing)stopPlay(); const t=(+e.target.value/1000)*natDur; $('scrubT').textContent=t.toFixed(2)+'s';
   if(!scrubR._busy){scrubR._busy=true;seekPreview(t).then(()=>{scrubR._busy=false;});}
 });
 
@@ -732,7 +888,7 @@ async function renderGIF(){
   computeDims();
 
   const fps=params.fps, dt=1/fps;
-  const start=Math.max(0,params.trimA), end=Math.min(vid.duration||0,params.trimB);
+  const start=Math.max(0,params.trimA), end=Math.min(natDur||0,params.trimB);
   const MAXF=450;
   let times=[]; for(let t=start;t<end-1e-3 && times.length<MAXF;t+=dt) times.push(t);
   if(times.length===0)times=[start];
@@ -742,8 +898,7 @@ async function renderGIF(){
   try{
     for(let i=0;i<times.length;i++){
       if(cancelReq){finishCancel();return;}
-      await seek(times[i]);
-      srcCtx.drawImage(vid,0,0,procW,procH);
+      await grabTo(times[i]);
       const d=srcCtx.getImageData(0,0,procW,procH).data;
       const work=new Uint8ClampedArray(d);
       if(params.keyOn){
@@ -755,15 +910,25 @@ async function renderGIF(){
       if(i%3===0)await new Promise(r=>setTimeout(r));
     }
 
-    let outW=procW,outH=procH,outFrames=frames;
+    // geometric transforms: manual crop, then mirror / flip, then reverse order
+    let gW=procW,gH=procH,gFrames=frames;
+    if(params.cropRect||params.mirror||params.flip){
+      gFrames=frames.map(f=>{const g=applyGeom(f,procW,procH,{cropRect:params.cropRect,mirror:params.mirror,flip:params.flip});gW=g.w;gH=g.h;return g.data;});
+    }
+    if(params.reverse)gFrames=gFrames.slice().reverse();
+    if(cancelReq){finishCancel();return;}
+
+    let outW=gW,outH=gH,outFrames=gFrames;
     if(params.crop){
-      const box=contentBBox(frames,procW,procH,128);
-      if(!box){finishErr('Nothing left after keying — the key colour may be removing the whole frame. Lower Similarity or re-pick the colour.');return;}
-      const pad=2;
-      box.x=Math.max(0,box.x-pad);box.y=Math.max(0,box.y-pad);
-      box.w=Math.min(procW-box.x,box.w+pad*2);box.h=Math.min(procH-box.y,box.h+pad*2);
-      outW=box.w;outH=box.h;
-      outFrames=frames.map(f=>cropFrame(f,procW,box));
+      const box=contentBBox(gFrames,gW,gH,128);
+      if(!box){if(params.keyOn){finishErr('Nothing left after keying — the key colour may be removing the whole frame. Lower Similarity or re-pick the colour.');return;}}
+      else{
+        const pad=2;
+        box.x=Math.max(0,box.x-pad);box.y=Math.max(0,box.y-pad);
+        box.w=Math.min(gW-box.x,box.w+pad*2);box.h=Math.min(gH-box.y,box.h+pad*2);
+        outW=box.w;outH=box.h;
+        outFrames=gFrames.map(f=>cropFrame(f,gW,box));
+      }
     }
     if(cancelReq){finishCancel();return;}
     if(params.bg){const bg=hexToRgb(params.bgColor);outFrames.forEach(f=>flattenFrame(f,outW,outH,bg,128));}

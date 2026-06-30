@@ -1,23 +1,26 @@
-# chromakey → gif
+# gif converter
 
-Turn a green-screen video into a **transparent animated GIF**, entirely in the browser. No upload, no backend, no build step — a single `index.html` you can drop straight onto GitHub Pages.
+Convert a **video or an existing GIF** to an **animated GIF**, entirely in the browser. Trim, crop, flip, mirror, reverse, resize, and — optionally — remove a green-screen backdrop for true transparency. No upload, no backend, no build step — a single `index.html` you can drop straight onto GitHub Pages.
 
-The whole thing is one self-contained file: the chroma-key/cleanup pipeline **and** a from-scratch GIF89a encoder (with real binary transparency) are written in plain JS with zero dependencies. It works offline once loaded.
+The whole thing is one self-contained file: the frame pipeline **and** a from-scratch GIF89a encoder (with real binary transparency) are written in plain JS with zero dependencies. It works offline once loaded.
 
 ## Use it
 
 1. Open the page.
-2. Drop in a video (MP4/H.264 or WebM are the safe bets — see caveats).
-3. The key colour is auto-detected from the first frame; tweak it with the eyedropper, the colour picker, or a hex value if needed.
-4. Adjust **Similarity** (how much of that colour to cut) and **Feather** (soft edge), watching the live checkerboard preview.
+2. Drop in a video (MP4/H.264 or WebM are the safe bets — see caveats) **or an existing GIF** to re-edit it.
+3. Set the **width**, **frame rate**, **palette size**, and **loop** — and use the **transform** toggles (mirror / flip / reverse) or **draw a crop** box on the preview.
+4. *(Optional)* Turn on **Remove background** to chroma-key a green screen out to transparency; the key colour is auto-detected and tweakable with the eyedropper, colour picker, or a hex value, with **Similarity** and **Feather** controlling the cut.
 5. *(Optional)* Drag the **trim** handles to render only part of the clip, and set a **filename** for the download.
 6. Hit **Render GIF**, then download. The live estimate under the button tells you how many frames you'll get before you commit.
 
-Controls: key colour, similarity, feather, output width, fps, palette size, plus toggles for spill suppression, edge cleanup, auto-crop, and loop.
+Controls: output width, fps, palette size, loop, transform (mirror/flip/reverse), crop, solid-background fill — plus an optional chroma key with key colour, similarity, feather, spill suppression, edge cleanup, and auto-crop.
 
 ### Usability features
 
-- **Play / pause preview** — a ▶ button next to the scrubber plays the clip live with keying applied, so you can watch the cut in motion instead of stepping frame by frame.
+- **GIF input** — drop an existing animated GIF (not just video) to trim, crop, flip, mirror, reverse, recolour, or resize it. GIFs are decoded frame-by-frame via the browser's `ImageDecoder`, and their existing transparency is preserved — so **Remove background** defaults *off* for GIFs (turn it on only if you actually want to chroma-key one). Needs a Chromium-based browser (Chrome/Edge) for `ImageDecoder`.
+- **Transform** — **Mirror** (flip left/right), **Flip** (flip top/bottom), and **Reverse** (play the frames backward) toggles.
+- **Crop** — click **Draw crop** and drag a box on the preview to export just that region; **Clear** removes it. Works alongside the auto-crop that trims transparent borders after keying.
+- **Play / pause preview** — a ▶ button next to the scrubber plays the clip live with the current settings applied, so you can watch the result in motion instead of stepping frame by frame.
 - **Remove-background toggle** — a master on/off switch for the chroma key. Off shows (and exports) the raw footage untouched; on cuts the backdrop. The key-colour controls dim when it's off.
 - **Trim range** — a dual-handle slider picks the in/out points, so you can export just a slice of a clip instead of the whole thing.
 - **Live frame estimate** — the note under *Render GIF* shows the frame count, duration, and frame-rate you're about to encode (and flags the 450-frame cap) before you start.
@@ -47,10 +50,12 @@ Nothing else is required — there's no build, no Node, no Actions. It's a stati
 
 ## How it's built
 
-Single file, three parts:
+Single file, four parts:
 
 - **GIF89a encoder** — median-cut palette (255 opaque colours + a reserved transparent index), nearest-colour cache, and a spec-correct LZW coder. The encoder was validated byte-for-byte against independent decoders (Pillow and ffmpeg) before shipping.
-- **Chroma-key pipeline** — YUV chroma-distance keying with an inner (cut) / outer (feather) ramp, green-spill suppression, connected-component cleanup (keeps the main subject, drops stray specks and border islands, and fills interior holes — but **not** holes whose pixels are still key-coloured, so backdrop showing through a gap like the space between two arms stays transparent instead of being patched back in), and auto-crop to content.
-- **UI glue** — `<video>` seek-based frame grabbing, live checkerboard preview, click-to-pick eyedropper, and a Blob download.
+- **Frame transforms** — manual crop, horizontal mirror, vertical flip, and frame-order reverse, applied to each extracted frame before palette building.
+- **Chroma-key pipeline** (optional) — YUV chroma-distance keying with an inner (cut) / outer (feather) ramp, green-spill suppression, connected-component cleanup (keeps the main subject, drops stray specks and border islands, and fills interior holes — but **not** holes whose pixels are still key-coloured, so backdrop showing through a gap like the space between two arms stays transparent instead of being patched back in), and auto-crop to content.
+- **Unified frame source** — either a `<video>` (seek-based grabbing) or an animated GIF decoded to per-frame canvases via the browser's `ImageDecoder`; everything downstream (preview, transforms, keying, encode) is source-agnostic.
+- **UI glue** — live checkerboard preview, play/pause, drag-to-crop overlay, click-to-pick eyedropper, and a Blob download.
 
 No frameworks. No CDN. The only browser storage used is a single `localStorage` key (`chromakey-gif-prefs`) that remembers your control settings — clearable any time with **Reset settings to defaults**.
